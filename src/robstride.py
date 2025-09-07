@@ -218,4 +218,3 @@ class RobStride:
         if self.ser and self.ser.is_open:
             self.disable()
         self.disconnect()
-        self.disconnect()
