@@ -77,6 +77,7 @@ class RobStride:
 
     def _write_parameter(self, index: int, value: Union[int, float]) -> Optional[bytes]:
         if isinstance(value, int):
+            # For RunMode, which is a uint8, pack as a 4-byte integer
             payload = struct.pack('<H', index) + b'\x00\x00' + struct.pack('<I', value)
         elif isinstance(value, float):
             payload = struct.pack('<H', index) + b'\x00\x00' + struct.pack('<f', value)
@@ -136,76 +137,107 @@ class RobStride:
         self._send_and_receive(frame)
         logger.info("Disable command sent successfully")
 
-    def set_mode_pp(self) -> bool:
-        logger.info("Setting motor to Position Profile (PP) mode")
-        self._write_parameter(ParameterIndex.RUN_MODE.value, RunMode.POSITION_PP.value)
+    def _set_run_mode(self, mode: RunMode) -> bool:
+        logger.info(f"Setting motor to {mode.name} mode")
+        self._write_parameter(ParameterIndex.RUN_MODE.value, mode.value)
 
         time.sleep(0.1)
         read_data = self._read_parameter(ParameterIndex.RUN_MODE.value)
         if read_data:
             current_mode = int.from_bytes(read_data[0:1], 'little')
-            if current_mode == RunMode.POSITION_PP.value:
-                logger.info("PP mode set successfully")
+            if current_mode == mode.value:
+                logger.info(f"{mode.name} mode set successfully")
                 return True
             else:
                 logger.error(
-                    f"PP mode setting failed: Unexpected run_mode value {current_mode}"
+                    f"{mode.name} mode setting failed: Unexpected run_mode value {current_mode}"
                 )
         else:
             logger.error("Failed to read run_mode parameter")
         return False
 
-    def set_pp_velocity(self, velocity: float) -> bool:
-        logger.info(f"Setting PP mode maximum velocity to {velocity} rad/s")
-        self._write_parameter(ParameterIndex.VEL_MAX.value, velocity)
+    def _set_float_parameter(
+        self, param_index: ParameterIndex, value: float, name: str, unit: str
+    ) -> bool:
+        logger.info(f"Setting {name} to {value} {unit}")
+        self._write_parameter(param_index.value, value)
 
         time.sleep(0.1)
-        read_data = self._read_parameter(ParameterIndex.VEL_MAX.value)
+        read_data = self._read_parameter(param_index.value)
         if read_data:
-            current_vel = struct.unpack('<f', read_data)[0]
-            if math.isclose(current_vel, velocity, rel_tol=1e-6):
-                logger.info(f"PP velocity set successfully to {current_vel:.2f} rad/s")
+            current_val = struct.unpack('<f', read_data)[0]
+            if math.isclose(current_val, value, rel_tol=1e-6):
+                logger.info(f"{name} set successfully to {current_val:.2f} {unit}")
                 return True
             else:
                 logger.error(
-                    f"PP velocity setting failed: Expected {velocity:.2f}, got {current_vel:.2f} rad/s"
+                    f"{name} setting failed: Expected {value:.2f}, got {current_val:.2f} {unit}"
                 )
         else:
-            logger.error("Failed to read vel_max parameter")
+            logger.error(f"Failed to read {name} parameter")
         return False
+
+    # --- PP (Profile Position) Mode Methods ---
+    def set_mode_pp(self) -> bool:
+        return self._set_run_mode(RunMode.POSITION_PP)
+
+    def set_pp_velocity(self, velocity: float) -> bool:
+        return self._set_float_parameter(
+            ParameterIndex.VEL_MAX, velocity, "PP velocity", "rad/s"
+        )
 
     def set_pp_acceleration(self, acceleration: float) -> bool:
-        logger.info(f"Setting PP mode acceleration to {acceleration} rad/s²")
-        self._write_parameter(ParameterIndex.ACC_SET.value, acceleration)
-
-        time.sleep(0.1)
-        read_data = self._read_parameter(ParameterIndex.ACC_SET.value)
-        if read_data:
-            current_acc = struct.unpack('<f', read_data)[0]
-            if math.isclose(current_acc, acceleration, rel_tol=1e-6):
-                logger.info(
-                    f"PP acceleration set successfully to {current_acc:.2f} rad/s²"
-                )
-                return True
-            else:
-                logger.error(
-                    f"PP acceleration setting failed: Expected {acceleration:.2f}, got {current_acc:.2f} rad/s²"
-                )
-        else:
-            logger.error("Failed to read acc_set parameter")
-        return False
+        return self._set_float_parameter(
+            ParameterIndex.ACC_SET, acceleration, "PP acceleration", "rad/s^2"
+        )
 
     def set_target_position(self, position_rad: float) -> None:
         logger.info(f"Setting target position to {position_rad:.2f} rad")
         self._write_parameter(ParameterIndex.LOC_REF.value, position_rad)
         logger.info("Target position command sent successfully")
 
+    # --- Velocity Mode Methods ---
+    def set_mode_velocity(self) -> bool:
+        return self._set_run_mode(RunMode.VELOCITY)
+
+    def set_velocity_limit_cur(self, current: float) -> bool:
+        return self._set_float_parameter(
+            ParameterIndex.LIMIT_CUR, current, "Velocity current limit", "A"
+        )
+
+    def set_velocity_acceleration(self, acceleration: float) -> bool:
+        return self._set_float_parameter(
+            ParameterIndex.ACC_RAD, acceleration, "Velocity acceleration", "rad/s^2"
+        )
+
+    def set_target_velocity(self, velocity: float) -> None:
+        logger.info(f"Setting target velocity to {velocity:.2f} rad/s")
+        self._write_parameter(ParameterIndex.SPD_REF.value, velocity)
+        logger.info("Target velocity command sent successfully")
+
+    # --- Current Mode Methods ---
+    def set_mode_current(self) -> bool:
+        return self._set_run_mode(RunMode.CURRENT)
+
+    def set_target_current(self, current: float) -> None:
+        logger.info(f"Setting target current to {current:.2f} A")
+        self._write_parameter(ParameterIndex.IQ_REF.value, current)
+        logger.info("Target current command sent successfully")
+
+    # --- CSP (Cyclic Synchronous Position) Mode Methods ---
+    def set_mode_csp(self) -> bool:
+        return self._set_run_mode(RunMode.POSITION_CSP)
+
+    def set_csp_velocity_limit(self, velocity: float) -> bool:
+        return self._set_float_parameter(
+            ParameterIndex.LIMIT_SPD, velocity, "CSP velocity limit", "rad/s"
+        )
+
     def disconnect(self) -> None:
         if self.ser and self.ser.is_open:
             self.ser.close()
             logger.info("Serial port closed")
 
-    # --- with構文をサポートするためのメソッド ---
     def __enter__(self) -> 'RobStride':
         """with構文の開始時に接続を行います。"""
         if self.connect():
@@ -216,5 +248,9 @@ class RobStride:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """with構文の終了時に、安全にモーターを停止し、切断します。"""
         if self.ser and self.ser.is_open:
+            # 念のため目標値を0にしてから停止
+            self.set_target_velocity(0.0)
+            self.set_target_current(0.0)
+            time.sleep(0.1)
             self.disable()
         self.disconnect()
