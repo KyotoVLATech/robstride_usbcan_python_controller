@@ -7,7 +7,7 @@ from typing import Any, Optional, Union
 
 import serial
 
-from constants import CommandType, MotorStatus, ParameterIndex, RunMode
+from src.constants import CommandType, MotorStatus, ParameterIndex, RunMode
 
 # Improved logger configuration
 logger = getLogger(__name__)

@@ -1,7 +1,7 @@
 import math
 import time
 
-from robstride import RobStride
+from src.robstride import RobStride
 
 # --- 設定項目 ---
 SERIAL_PORT = "COM12"  # ご自身の環境に合わせてCOMポート名を指定してください
@@ -61,3 +61,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+# python -m src.samples.pp_sample
