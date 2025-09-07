@@ -1,48 +1,22 @@
-import enum
+import logging
 import math
 import struct
 import time
+from logging import Formatter, StreamHandler, getLogger
 from typing import Any, Optional, Union
 
 import serial
 
-# --- 制御の基本要素を定義 ---
+from constants import CommandType, MotorStatus, ParameterIndex, RunMode
 
-
-class CommandType(enum.Enum):
-    """モーターへ送信するコマンドの種類"""
-
-    GET_DEVICE_ID = 0x00
-    ENABLE = 0x03
-    DISABLE = 0x04  # disableコマンドを追加
-    READ_PARAM = 0x11
-    WRITE_PARAM = 0x12
-
-
-class MotorStatus(enum.Enum):
-    """モーターからの応答に含まれる状態"""
-
-    RESET = 0
-    CALIBRATION = 1
-    RUN = 2
-    UNKNOWN = 99
-
-
-class RunMode(enum.Enum):
-    """モーターの運転モード"""
-
-    OPERATION = 0
-    POSITION_PP = 1
-    VELOCITY = 2
-    CURRENT = 3
-    POSITION_CSP = 5
-
-
-# --- パラメータのインデックスを定数として定義 ---
-PARAM_RUN_MODE = 0x7005
-PARAM_VEL_MAX = 0x7024
-PARAM_ACC_SET = 0x7025
-PARAM_LOC_REF = 0x7016
+# Improved logger configuration
+logger = getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+handler_format = Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+stream_handler = StreamHandler()
+stream_handler.setLevel(logging.INFO)
+stream_handler.setFormatter(handler_format)
+logger.addHandler(stream_handler)
 
 
 class RobStride:
@@ -78,17 +52,19 @@ class RobStride:
 
     def _send_and_receive(self, frame: bytes) -> Optional[bytes]:
         if not self.ser or not self.ser.is_open:
-            print("❌ エラー: シリアルポートが開かれていません。")
+            logger.error("Serial port is not open")
             return None
         self.ser.reset_input_buffer()
         self.ser.write(frame)
+        logger.debug(f"Sent frame: {frame.hex(' ')}")
         response = self.ser.read_until(b'\x0d\x0a', size=17)
         if response and response.startswith(b'AT') and response.endswith(b'\r\n'):
+            logger.debug(f"Received valid response: {response.hex(' ')}")
             return response
         elif not response:
-            print("❌ 検証失敗: モーターから時間内に応答がありませんでした。")
+            logger.error("No response received from motor within timeout")
         else:
-            print(f"❌ 検証失敗: 不正な形式の応答を受信しました -> {response.hex(' ')}")
+            logger.error(f"Invalid response format received: {response.hex(' ')}")
         return None
 
     def _read_parameter(self, index: int) -> Optional[bytes]:
@@ -111,27 +87,31 @@ class RobStride:
         return self._send_and_receive(frame)
 
     def connect(self) -> bool:
-        print("--- 接続開始 ---")
+        logger.info("Initiating connection to motor")
         try:
             self.ser = serial.Serial(self.port, self.baudrate, timeout=1.0)
-            print("✅ ポートを開きました。")
+            logger.info(f"Serial port {self.port} opened successfully")
         except serial.SerialException as e:
-            print(f"❌ ポートを開けませんでした: {e}")
+            logger.error(f"Failed to open serial port {self.port}: {e}")
             return False
 
         frame = self._create_frame(CommandType.GET_DEVICE_ID)
         if self._send_and_receive(frame):
-            print("✅ 接続成功: モーターから正常な応答がありました。")
+            logger.info(
+                f"Connection established successfully with motor ID {self.motor_id}"
+            )
             return True
         else:
+            logger.error("Failed to establish connection with motor")
             self.disconnect()
             return False
 
     def enable(self) -> bool:
-        print("\n--- モーター有効化 ---")
+        logger.info("Enabling motor")
         frame = self._create_frame(CommandType.ENABLE)
         response = self._send_and_receive(frame)
         if not response:
+            logger.error("Failed to send enable command")
             return False
 
         can_id_29bit = int.from_bytes(response[2:6], 'big') >> 3
@@ -143,85 +123,87 @@ class RobStride:
         )
 
         if status == MotorStatus.RUN:
-            print("✅ 有効化成功: モーターはRUN状態に移行しました。")
+            logger.info("Motor enabled successfully and entered RUN state")
             return True
         else:
-            print(
-                f"❌ 有効化失敗: モーターステータスが不正です (現在: {status.name})。"
-            )
+            logger.error(f"Motor enable failed: Invalid status {status.name}")
             return False
 
     def disable(self) -> None:
         """モーターを無効化（運転停止）します。"""
-        print("\n--- モーター無効化 ---")
+        logger.info("Disabling motor")
         frame = self._create_frame(CommandType.DISABLE)
         self._send_and_receive(frame)
-        print("✅ 無効化コマンドを送信しました。")
+        logger.info("Disable command sent successfully")
 
     def set_mode_pp(self) -> bool:
-        print("\n--- PPモード設定 ---")
-        self._write_parameter(PARAM_RUN_MODE, RunMode.POSITION_PP.value)
+        logger.info("Setting motor to Position Profile (PP) mode")
+        self._write_parameter(ParameterIndex.RUN_MODE.value, RunMode.POSITION_PP.value)
 
         time.sleep(0.1)
-        read_data = self._read_parameter(PARAM_RUN_MODE)
+        read_data = self._read_parameter(ParameterIndex.RUN_MODE.value)
         if read_data:
             current_mode = int.from_bytes(read_data[0:1], 'little')
             if current_mode == RunMode.POSITION_PP.value:
-                print("✅ モード設定成功: run_modeが正しく1に設定されました。")
+                logger.info("PP mode set successfully")
                 return True
             else:
-                print(
-                    f"❌ モード設定失敗: run_modeが予期せぬ値です (現在値: {current_mode})。"
+                logger.error(
+                    f"PP mode setting failed: Unexpected run_mode value {current_mode}"
                 )
+        else:
+            logger.error("Failed to read run_mode parameter")
         return False
 
     def set_pp_velocity(self, velocity: float) -> bool:
-        print(f"\n--- PPモード最大速度設定 ({velocity} rad/s) ---")
-        self._write_parameter(PARAM_VEL_MAX, velocity)
+        logger.info(f"Setting PP mode maximum velocity to {velocity} rad/s")
+        self._write_parameter(ParameterIndex.VEL_MAX.value, velocity)
 
         time.sleep(0.1)
-        read_data = self._read_parameter(PARAM_VEL_MAX)
+        read_data = self._read_parameter(ParameterIndex.VEL_MAX.value)
         if read_data:
             current_vel = struct.unpack('<f', read_data)[0]
             if math.isclose(current_vel, velocity, rel_tol=1e-6):
-                print(
-                    f"✅ 速度設定成功: vel_maxが正しく設定されました (実測値: {current_vel:.2f})。"
-                )
+                logger.info(f"PP velocity set successfully to {current_vel:.2f} rad/s")
                 return True
             else:
-                print(
-                    f"❌ 速度設定失敗: vel_maxが予期せぬ値です (実測値: {current_vel:.2f})。"
+                logger.error(
+                    f"PP velocity setting failed: Expected {velocity:.2f}, got {current_vel:.2f} rad/s"
                 )
+        else:
+            logger.error("Failed to read vel_max parameter")
         return False
 
     def set_pp_acceleration(self, acceleration: float) -> bool:
-        print(f"\n--- PPモード加速度設定 ({acceleration} rad/s^2) ---")
-        self._write_parameter(PARAM_ACC_SET, acceleration)
+        logger.info(f"Setting PP mode acceleration to {acceleration} rad/s²")
+        self._write_parameter(ParameterIndex.ACC_SET.value, acceleration)
 
         time.sleep(0.1)
-        read_data = self._read_parameter(PARAM_ACC_SET)
+        read_data = self._read_parameter(ParameterIndex.ACC_SET.value)
         if read_data:
             current_acc = struct.unpack('<f', read_data)[0]
             if math.isclose(current_acc, acceleration, rel_tol=1e-6):
-                print(
-                    f"✅ 加速度設定成功: acc_setが正しく設定されました (実測値: {current_acc:.2f})。"
+                logger.info(
+                    f"PP acceleration set successfully to {current_acc:.2f} rad/s²"
                 )
                 return True
             else:
-                print(
-                    f"❌ 加速度設定失敗: acc_setが予期せぬ値です (実測値: {current_acc:.2f})。"
+                logger.error(
+                    f"PP acceleration setting failed: Expected {acceleration:.2f}, got {current_acc:.2f} rad/s²"
                 )
+        else:
+            logger.error("Failed to read acc_set parameter")
         return False
 
     def set_target_position(self, position_rad: float) -> None:
-        print(f"\n--- 目標位置指令 ({position_rad:.2f} rad) ---")
-        self._write_parameter(PARAM_LOC_REF, position_rad)
-        print("✅ 位置指令を送信しました。")
+        logger.info(f"Setting target position to {position_rad:.2f} rad")
+        self._write_parameter(ParameterIndex.LOC_REF.value, position_rad)
+        logger.info("Target position command sent successfully")
 
     def disconnect(self) -> None:
         if self.ser and self.ser.is_open:
             self.ser.close()
-            print("\nポートを閉じました。")
+            logger.info("Serial port closed")
 
     # --- with構文をサポートするためのメソッド ---
     def __enter__(self) -> 'RobStride':
@@ -229,10 +211,11 @@ class RobStride:
         if self.connect():
             return self
         else:
-            raise IOError("モーターとの接続に失敗しました。")
+            raise IOError("Failed to establish connection with motor")
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """with構文の終了時に、安全にモーターを停止し、切断します。"""
         if self.ser and self.ser.is_open:
             self.disable()
+        self.disconnect()
         self.disconnect()
