@@ -21,15 +21,15 @@ def create_at_command(
     can_id_29bit = (command_type << 24) | (host_id << 8) | motor_id
 
     # 2. USB-CANツールの特殊なエンコーディングを適用
-    # マニュアルの変換例から、29ビットIDの末尾にバイナリの'100'を追加すると推測 [cite: 342]
+    # マニュアルの変換例から、29ビットIDの末尾にバイナリの'100'を追加すると推測
     encoded_id_32bit = (can_id_29bit << 3) | 0b100
 
     # 3. ATコマンドの各パーツをバイト列で作成
-    header = b'\x41\x54'  # "AT" [cite: 177]
+    header = b'\x41\x54'  # "AT"
     encoded_id_bytes = encoded_id_32bit.to_bytes(4, 'big')
     extended_frame_flag = b'\x08'
     data = data_payload.to_bytes(8, 'big')  # データフィールド
-    tail = b'\x0d\x0a'  # CR+LF [cite: 177]
+    tail = b'\x0d\x0a'  # CR+LF
 
     return header + encoded_id_bytes + extended_frame_flag + data + tail
 
@@ -38,7 +38,7 @@ def create_at_command(
 if __name__ == "__main__":
     # 疎通確認用の「デバイスID取得（タイプ0）」コマンドを生成
     # このコマンドはモーターにデータを要求するだけで、状態を変更しないため安全です
-    # データペイロードは0でなければなりません [cite: 502]
+    # データペイロードは0でなければなりません
     command_to_send = create_at_command(
         command_type=0, motor_id=MOTOR_CAN_ID, host_id=HOST_CAN_ID, data_payload=0
     )
