@@ -31,5 +31,8 @@
     "mypy-type-checker.severity": {
         "error": "Information",
         "note": "Information"
-    }
+    },
+    "cSpell.words": [
+        "baudrate"
+    ]
 }
