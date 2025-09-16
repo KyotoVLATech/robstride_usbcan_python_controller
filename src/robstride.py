@@ -19,7 +19,7 @@ stream_handler.setFormatter(handler_format)
 logger.addHandler(stream_handler)
 
 
-class RobStride:
+class RobStrideController:
     def __init__(
         self, port: str, baudrate: int = 921600, motor_id: int = 127, host_id: int = 253
     ):
@@ -48,7 +48,9 @@ class RobStride:
         encoded_id_bytes = encoded_id_32bit.to_bytes(4, 'big')
         extended_frame_flag = b'\x08'
         tail = b'\x0d\x0a'
-        return header + encoded_id_bytes + extended_frame_flag + data_payload + tail
+        byte = header + encoded_id_bytes + extended_frame_flag + data_payload + tail
+        assert isinstance(byte, bytes) and len(byte) == 17, "Frame must be 17 bytes"
+        return byte
 
     def _send_and_receive(self, frame: bytes) -> Optional[bytes]:
         if not self.ser or not self.ser.is_open:
@@ -60,7 +62,11 @@ class RobStride:
         response = self.ser.read_until(b'\x0d\x0a', size=17)
         if response and response.startswith(b'AT') and response.endswith(b'\r\n'):
             logger.debug(f"Received valid response: {response.hex(' ')}")
-            return response
+            byte = response
+            assert (
+                isinstance(byte, bytes) and len(byte) == 17
+            ), "Response must be 17 bytes"
+            return byte
         elif not response:
             logger.error("No response received from motor within timeout")
         else:
@@ -238,7 +244,7 @@ class RobStride:
             self.ser.close()
             logger.info("Serial port closed")
 
-    def __enter__(self) -> 'RobStride':
+    def __enter__(self) -> 'RobStrideController':
         """with構文の開始時に接続を行います。"""
         if self.connect():
             return self

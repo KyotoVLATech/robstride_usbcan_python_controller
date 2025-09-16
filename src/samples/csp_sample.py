@@ -1,7 +1,7 @@
 import math
 import time
 
-from src.robstride import RobStride
+from src.robstride import RobStrideController
 
 # --- 設定項目 ---
 SERIAL_PORT = "COM6"  # ご自身の環境に合わせてCOMポート名を指定してください
@@ -15,7 +15,7 @@ def main() -> None:
     print("--- RobStride CSPモード 制御サンプル ---")
 
     try:
-        with RobStride(port=SERIAL_PORT, motor_id=MOTOR_ID) as motor:
+        with RobStrideController(port=SERIAL_PORT, motor_id=MOTOR_ID) as motor:
 
             # --- ステップ1: Disable状態でモードを設定 ---
             if not motor.set_mode_csp():
