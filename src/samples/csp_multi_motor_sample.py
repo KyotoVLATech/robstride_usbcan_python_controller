@@ -63,14 +63,14 @@ def main() -> None:
             time.sleep(3)
 
             # パターン1: 全モーターを45度に移動
-            # print("\n📍 パターン1: 全モーターを45度 (π/4 rad) に移動")
-            # target_positions = [-math.pi / 4, -math.pi / 4, -math.pi / 4]
-            # for i, motor in enumerate(MOTORS):
-            #     controller.set_target_position(motor.id, target_positions[i])
-            #     print(
-            #         f"  -> モーター{motor.id}: 目標位置 {target_positions[i]:.2f} rad"
-            #     )
-            # time.sleep(4)
+            print("\n📍 パターン1: 全モーターを45度 (π/4 rad) に移動")
+            target_positions = [-math.pi / 4, -math.pi / 4, -math.pi / 4]
+            for i, motor in enumerate(MOTORS):
+                controller.set_target_position(motor.id, target_positions[i])
+                print(
+                    f"  -> モーター{motor.id}: 目標位置 {target_positions[i]:.2f} rad"
+                )
+            time.sleep(4)
 
             # パターン4: 原点復帰
             print("\n📍 パターン4: 全モーター原点復帰")
