@@ -8,9 +8,9 @@ SERIAL_PORT = "COM6"  # ご自身の環境に合わせてCOMポート名を指�
 
 # 3つのモーターの設定
 MOTORS = [
-    RobStride(id=4, max_pos=2 * math.pi, min_pos=0.0, max_speed=1.0),
-    RobStride(id=5, max_pos=2 * math.pi, min_pos=0.0, max_speed=1.0),
-    RobStride(id=6, max_pos=2 * math.pi, min_pos=0.0, max_speed=1.0),
+    RobStride(id=4, max_pos=2 * math.pi, min_pos=0.0, max_speed=1.0, offset=0.0),
+    RobStride(id=5, max_pos=2 * math.pi, min_pos=0.0, max_speed=1.0, offset=0.0),
+    RobStride(id=6, max_pos=2 * math.pi, min_pos=0.0, max_speed=1.0, offset=0.0),
 ]
 
 
@@ -55,15 +55,22 @@ def main() -> None:
             # --- ステップ4: 同期された位置制御を実行 ---
             print("\n🎯 同期位置制御を開始します...")
 
-            # パターン1: 全モーターを90度に移動
-            print("\n📍 パターン1: 全モーターを90度 (π/2 rad) に移動")
-            target_positions = [-math.pi / 4, -math.pi / 4, -math.pi / 4]
-            for i, motor in enumerate(MOTORS):
-                controller.set_target_position(motor.id, target_positions[i])
-                print(
-                    f"  -> モーター{motor.id}: 目標位置 {target_positions[i]:.2f} rad"
-                )
-            time.sleep(4)
+            # パターン4: 原点復帰
+            print("\n📍 パターン4: 全モーター原点復帰")
+            for motor in MOTORS:
+                controller.set_target_position(motor.id, 0.0)
+                print(f"  -> モーター{motor.id}: 目標位置 0.00 rad")
+            time.sleep(3)
+
+            # パターン1: 全モーターを45度に移動
+            # print("\n📍 パターン1: 全モーターを45度 (π/4 rad) に移動")
+            # target_positions = [-math.pi / 4, -math.pi / 4, -math.pi / 4]
+            # for i, motor in enumerate(MOTORS):
+            #     controller.set_target_position(motor.id, target_positions[i])
+            #     print(
+            #         f"  -> モーター{motor.id}: 目標位置 {target_positions[i]:.2f} rad"
+            #     )
+            # time.sleep(4)
 
             # パターン4: 原点復帰
             print("\n📍 パターン4: 全モーター原点復帰")

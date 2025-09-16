@@ -23,6 +23,7 @@ logger.addHandler(stream_handler)
 @dataclass
 class RobStride:
     id: int
+    offset: float  # in radians
     max_pos: float  # in radians (0 to 2π)
     min_pos: float  # in radians (0 to 2π)
     max_speed: float  # in radians per second
@@ -259,7 +260,11 @@ class RobStrideController:
         logger.info(
             f"Setting target position to {position_rad:.2f} rad for motor {motor_id}"
         )
-        self._write_parameter(motor_id, ParameterIndex.LOC_REF.value, position_rad)
+        self._write_parameter(
+            motor_id,
+            ParameterIndex.LOC_REF.value,
+            position_rad + self.motors[motor_id].offset,
+        )
         logger.info(f"Target position command sent successfully to motor {motor_id}")
 
     # --- Velocity Mode Methods ---
