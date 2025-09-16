@@ -4,8 +4,8 @@ import time
 from src.robstride import RobStride
 
 # --- 設定項目 ---
-SERIAL_PORT = "COM12"  # ご自身の環境に合わせてCOMポート名を指定してください
-MOTOR_ID = 127  # 制御するモーターのCAN IDを指定してください
+SERIAL_PORT = "COM6"  # ご自身の環境に合わせてCOMポート名を指定してください
+MOTOR_ID = 4  # 制御するモーターのCAN IDを指定してください
 
 
 def main() -> None:
@@ -30,7 +30,7 @@ def main() -> None:
             time.sleep(0.5)
 
             # --- ステップ3: Enable状態でパラメータを設定 ---
-            if not motor.set_csp_velocity_limit(5.0):  # 最大速度 5.0 rad/s
+            if not motor.set_csp_velocity_limit(1.0):  # 最大速度 5.0 rad/s
                 print("エラー: 最大速度の設定に失敗しました。処理を中断します。")
                 return
 
