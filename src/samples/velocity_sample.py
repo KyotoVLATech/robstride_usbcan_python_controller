@@ -1,4 +1,4 @@
-import time
+import asyncio
 
 from src.robstride import RobStride, RobStrideController, RobStrideLimits
 
@@ -19,19 +19,19 @@ MOTORS = [
 ]
 
 
-def main() -> None:
+async def main() -> None:
     """
     RobStrideモーターをVelocity制御モードで制御するメイン関数。
     """
     print("--- RobStride Velocity制御モードサンプル ---")
 
     try:
-        with RobStrideController(port=SERIAL_PORT, motors=MOTORS) as controller:
+        async with RobStrideController(port=SERIAL_PORT, motors=MOTORS) as controller:
 
             # --- ステップ1: 全モーターをDisable状態でVelocity制御モードに設定 ---
             print("\n🔧 全モーターをVelocity制御モードに設定中...")
             for motor in MOTORS:
-                if not controller.set_mode_velocity(motor.id):
+                if not await controller.set_mode_velocity(motor.id):
                     print(
                         f"エラー: モーター{motor.id}のVelocity制御モード設定に失敗しました。"
                     )
@@ -41,17 +41,17 @@ def main() -> None:
             # --- ステップ2: 全モーターを有効化 ---
             print("\n⚡ 全モーターを有効化中...")
             for motor in MOTORS:
-                if not controller.enable(motor.id):
+                if not await controller.enable(motor.id):
                     print(f"エラー: モーター{motor.id}の有効化に失敗しました。")
                     return
                 print(f"  ✅ モーター{motor.id}: 有効化完了")
 
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
 
             # --- ステップ3: Velocity制限パラメータを適用 ---
             print("\n⚙️ Velocity制限パラメータを設定中...")
             for motor in MOTORS:
-                if not controller.apply_velocity_limits(motor.id):
+                if not await controller.apply_velocity_limits(motor.id):
                     print(
                         f"エラー: モーター{motor.id}のVelocity制限設定に失敗しました。"
                     )
@@ -65,32 +65,32 @@ def main() -> None:
             print("\n📍 パターン1: 正方向回転 (0.5 rad/s)")
             target_velocity = 15.7
             for motor in MOTORS:
-                controller.set_target_velocity(motor.id, target_velocity)
+                await controller.set_target_velocity(motor.id, target_velocity)
                 print(f"  -> モーター{motor.id}: 目標速度 {target_velocity:.1f} rad/s")
-            time.sleep(3)
+            await asyncio.sleep(3)
 
             # パターン2: 停止
             print("\n📍 パターン2: 停止 (0.0 rad/s)")
             target_velocity = 0.0
             for motor in MOTORS:
-                controller.set_target_velocity(motor.id, target_velocity)
+                await controller.set_target_velocity(motor.id, target_velocity)
                 print(f"  -> モーター{motor.id}: 目標速度 {target_velocity:.1f} rad/s")
-            time.sleep(2)
+            await asyncio.sleep(2)
 
             # パターン3: 負方向回転
             print("\n📍 パターン3: 負方向回転 (-0.8 rad/s)")
             target_velocity = -0.8
             for motor in MOTORS:
-                controller.set_target_velocity(motor.id, target_velocity)
+                await controller.set_target_velocity(motor.id, target_velocity)
                 print(f"  -> モーター{motor.id}: 目標速度 {target_velocity:.1f} rad/s")
-            time.sleep(3)
+            await asyncio.sleep(3)
 
             # パターン4: 最終停止
             print("\n📍 パターン6: 最終停止")
             for motor in MOTORS:
-                controller.set_target_velocity(motor.id, 0.0)
+                await controller.set_target_velocity(motor.id, 0.0)
                 print(f"  -> モーター{motor.id}: 目標速度 0.0 rad/s")
-            time.sleep(2)
+            await asyncio.sleep(2)
 
             print("\n✅ 全ての動作パターンが正常に完了しました。")
 
@@ -99,5 +99,5 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
 # 実行コマンド: python -m src.samples.velocity_sample

@@ -1,12 +1,13 @@
+import asyncio
 import logging
 import math
 import struct
-import time
+from asyncio import Lock
 from dataclasses import dataclass
 from logging import Formatter, StreamHandler, getLogger
 from typing import Any, Optional, Union
 
-import serial
+import serial_asyncio
 
 from src.constants import CommandType, MotorStatus, ParameterIndex, RunMode
 
@@ -75,7 +76,9 @@ class RobStrideController:
         self.baudrate = baudrate
         self.motors = {motor.id: motor for motor in motors}
         self.host_id = host_id
-        self.ser: Optional[serial.Serial] = None
+        self.reader: Optional[asyncio.StreamReader] = None
+        self.writer: Optional[asyncio.StreamWriter] = None
+        self.lock = Lock()
 
     def _create_frame(
         self,
@@ -101,38 +104,70 @@ class RobStrideController:
         assert isinstance(byte, bytes) and len(byte) == 17, "Frame must be 17 bytes"
         return byte
 
-    def _send_and_receive(self, frame: bytes) -> Optional[bytes]:
-        if not self.ser or not self.ser.is_open:
-            logger.error("Serial port is not open")
-            return None
-        self.ser.reset_input_buffer()
-        self.ser.write(frame)
-        logger.debug(f"Sent frame: {frame.hex(' ')}")
-        response = self.ser.read_until(b'\x0d\x0a', size=17)
-        if response and response.startswith(b'AT') and response.endswith(b'\r\n'):
-            logger.debug(f"Received valid response: {response.hex(' ')}")
-            byte = response
-            assert (
-                isinstance(byte, bytes) and len(byte) == 17
-            ), "Response must be 17 bytes"
-            return byte
-        elif not response:
-            logger.error("No response received from motor within timeout")
-        else:
-            logger.error(f"Invalid response format received: {response.hex(' ')}")
-        return None
+    async def _send_and_receive(self, frame: bytes) -> Optional[bytes]:
+        # ★ このロックが単一バスの混線を防ぐ
+        async with self.lock:
+            if not self.writer or self.writer.is_closing():
+                logger.error("Serial connection is not open")
+                return None
 
-    def _read_parameter(self, motor_id: int, index: int) -> Optional[bytes]:
+            try:
+                # Clear any pending data in the reader
+                # Note: StreamReader doesn't have reset_input_buffer,
+                # but we can read and discard any pending data
+                while True:
+                    try:
+                        # Try to read with a very short timeout
+                        pending = await asyncio.wait_for(
+                            self.reader.read(1024), timeout=0.001
+                        )
+                        if not pending:
+                            break
+                    except asyncio.TimeoutError:
+                        break
+
+                # Send the frame
+                self.writer.write(frame)
+                await self.writer.drain()
+                logger.debug(f"Sent frame: {frame.hex(' ')}")
+
+                # Read response with timeout
+                response = await asyncio.wait_for(
+                    self.reader.readuntil(b'\x0d\x0a'), timeout=1.0
+                )
+
+            except asyncio.TimeoutError:
+                logger.error("No response received from motor within timeout")
+                return None
+            except Exception as e:
+                logger.error(f"Error during serial I/O: {e}")
+                return None
+
+            if response and response.startswith(b'AT') and response.endswith(b'\r\n'):
+                logger.debug(f"Received valid response: {response.hex(' ')}")
+                if len(response) == 17:
+                    return response
+                else:
+                    logger.error(
+                        f"Invalid response length: expected 17 bytes, got {len(response)}"
+                    )
+            else:
+                logger.error(
+                    f"Invalid response format received: {response.hex(' ') if response else 'None'}"
+                )
+            return None
+
+    async def _read_parameter(self, motor_id: int, index: int) -> Optional[bytes]:
         payload = struct.pack('<H', index) + b'\x00' * 6
         frame = self._create_frame(
             CommandType.READ_PARAM, motor_id, self.host_id, payload
         )
-        response = self._send_and_receive(frame)
+        response = await self._send_and_receive(frame)
         if response:
             return response[11:15]
         return None
 
-    def _write_parameter(
+    async def _write_parameter(
         self, motor_id: int, index: int, value: Union[int, float]
     ) -> Optional[bytes]:
         if isinstance(value, int):
@@ -146,14 +181,18 @@ class RobStrideController:
         frame = self._create_frame(
             CommandType.WRITE_PARAM, motor_id, self.host_id, payload
         )
-        return self._send_and_receive(frame)
+        return await self._send_and_receive(frame)
 
-    def connect(self) -> bool:
+    async def connect(self) -> bool:
         logger.info("Initiating connection to motors")
         try:
-            self.ser = serial.Serial(self.port, self.baudrate, timeout=1.0)
+            # Create serial connection with asyncio
+            coro = serial_asyncio.open_serial_connection(
+                url=self.port, baudrate=self.baudrate, timeout=1.0
+            )
+            self.reader, self.writer = await coro
             logger.info(f"Serial port {self.port} opened successfully")
-        except serial.SerialException as e:
+        except Exception as e:
             logger.error(f"Failed to open serial port {self.port}: {e}")
             return False
 
@@ -161,7 +200,7 @@ class RobStrideController:
         all_connected = True
         for motor_id in self.motors.keys():
             frame = self._create_frame(CommandType.GET_DEVICE_ID, motor_id)
-            if self._send_and_receive(frame):
+            if await self._send_and_receive(frame):
                 logger.info(
                     f"Connection established successfully with motor ID {motor_id}"
                 )
@@ -174,17 +213,17 @@ class RobStrideController:
             return True
         else:
             logger.error("Failed to connect to some motors")
-            self.disconnect()
+            await self.disconnect()
             return False
 
-    def enable(self, motor_id: int) -> bool:
+    async def enable(self, motor_id: int) -> bool:
         if motor_id not in self.motors:
             logger.error(f"Motor ID {motor_id} not found in motor list")
             return False
 
         logger.info(f"Enabling motor {motor_id}")
         frame = self._create_frame(CommandType.ENABLE, motor_id)
-        response = self._send_and_receive(frame)
+        response = await self._send_and_receive(frame)
         if not response:
             logger.error(f"Failed to send enable command to motor {motor_id}")
             return False
@@ -207,7 +246,7 @@ class RobStrideController:
             )
             return False
 
-    def disable(self, motor_id: int) -> None:
+    async def disable(self, motor_id: int) -> None:
         """指定されたモーターを無効化（運転停止）します。"""
         if motor_id not in self.motors:
             logger.error(f"Motor ID {motor_id} not found in motor list")
@@ -215,7 +254,7 @@ class RobStrideController:
 
         logger.info(f"Disabling motor {motor_id}")
         frame = self._create_frame(CommandType.DISABLE, motor_id)
-        self._send_and_receive(frame)
+        await self._send_and_receive(frame)
         self.motors[motor_id]._set_enabled(False)
         self.motors[motor_id]._set_mode(None)
         logger.info(f"Disable command sent successfully to motor {motor_id}")
@@ -248,12 +287,12 @@ class RobStrideController:
 
         return True
 
-    def _set_run_mode(self, motor_id: int, mode: RunMode) -> bool:
+    async def _set_run_mode(self, motor_id: int, mode: RunMode) -> bool:
         logger.info(f"Setting motor {motor_id} to {mode.name} mode")
-        self._write_parameter(motor_id, ParameterIndex.RUN_MODE.value, mode.value)
+        await self._write_parameter(motor_id, ParameterIndex.RUN_MODE.value, mode.value)
 
-        time.sleep(0.1)
-        read_data = self._read_parameter(motor_id, ParameterIndex.RUN_MODE.value)
+        await asyncio.sleep(0.1)
+        read_data = await self._read_parameter(motor_id, ParameterIndex.RUN_MODE.value)
         if read_data:
             current_mode = int.from_bytes(read_data[0:1], 'little')
             if current_mode == mode.value:
@@ -268,7 +307,7 @@ class RobStrideController:
             logger.error(f"Failed to read run_mode parameter for motor {motor_id}")
         return False
 
-    def _set_float_parameter(
+    async def _set_float_parameter(
         self,
         motor_id: int,
         param_index: ParameterIndex,
@@ -281,10 +320,10 @@ class RobStrideController:
             return False
 
         logger.info(f"Setting {name} to {value} {unit} for motor {motor_id}")
-        self._write_parameter(motor_id, param_index.value, value)
+        await self._write_parameter(motor_id, param_index.value, value)
 
-        time.sleep(0.1)
-        read_data = self._read_parameter(motor_id, param_index.value)
+        await asyncio.sleep(0.1)
+        read_data = await self._read_parameter(motor_id, param_index.value)
         if read_data:
             current_val = struct.unpack('<f', read_data)[0]
             if math.isclose(current_val, value, rel_tol=1e-6):
@@ -301,10 +340,10 @@ class RobStrideController:
         return False
 
     # --- PP (Profile Position) Mode Methods ---
-    def set_mode_pp(self, motor_id: int) -> bool:
-        return self._set_run_mode(motor_id, RunMode.POSITION_PP)
+    async def set_mode_pp(self, motor_id: int) -> bool:
+        return await self._set_run_mode(motor_id, RunMode.POSITION_PP)
 
-    def apply_pp_limits(self, motor_id: int) -> bool:
+    async def apply_pp_limits(self, motor_id: int) -> bool:
         """PP モードのリミッターを適用"""
         if not self._check_motor_mode(motor_id, RunMode.POSITION_PP):
             return False
@@ -318,7 +357,7 @@ class RobStrideController:
         limits = motor.limits
 
         if limits.pp_vel_max is not None:
-            success &= self._set_float_parameter(
+            success &= await self._set_float_parameter(
                 motor_id,
                 ParameterIndex.VEL_MAX,
                 limits.pp_vel_max,
@@ -327,7 +366,7 @@ class RobStrideController:
             )
 
         if limits.pp_acc_set is not None:
-            success &= self._set_float_parameter(
+            success &= await self._set_float_parameter(
                 motor_id,
                 ParameterIndex.ACC_SET,
                 limits.pp_acc_set,
@@ -336,7 +375,7 @@ class RobStrideController:
             )
 
         if limits.pp_limit_cur is not None:
-            success &= self._set_float_parameter(
+            success &= await self._set_float_parameter(
                 motor_id,
                 ParameterIndex.LIMIT_CUR,
                 limits.pp_limit_cur,
@@ -346,7 +385,7 @@ class RobStrideController:
 
         return success
 
-    def set_target_position(self, motor_id: int, position_rad: float) -> None:
+    async def set_target_position(self, motor_id: int, position_rad: float) -> None:
         if motor_id not in self.motors:
             logger.error(f"Motor ID {motor_id} not found in motor list")
             return
@@ -354,7 +393,7 @@ class RobStrideController:
         logger.info(
             f"Setting target position to {position_rad:.2f} rad for motor {motor_id}"
         )
-        self._write_parameter(
+        await self._write_parameter(
             motor_id,
             ParameterIndex.LOC_REF.value,
             position_rad + self.motors[motor_id].offset,
@@ -362,10 +401,10 @@ class RobStrideController:
         logger.info(f"Target position command sent successfully to motor {motor_id}")
 
     # --- Velocity Mode Methods ---
-    def set_mode_velocity(self, motor_id: int) -> bool:
-        return self._set_run_mode(motor_id, RunMode.VELOCITY)
+    async def set_mode_velocity(self, motor_id: int) -> bool:
+        return await self._set_run_mode(motor_id, RunMode.VELOCITY)
 
-    def apply_velocity_limits(self, motor_id: int) -> bool:
+    async def apply_velocity_limits(self, motor_id: int) -> bool:
         """Velocity モードのリミッターを適用"""
         if not self._check_motor_mode(motor_id, RunMode.VELOCITY):
             return False
@@ -379,7 +418,7 @@ class RobStrideController:
         limits = motor.limits
 
         if limits.velocity_limit_cur is not None:
-            success &= self._set_float_parameter(
+            success &= await self._set_float_parameter(
                 motor_id,
                 ParameterIndex.LIMIT_CUR,
                 limits.velocity_limit_cur,
@@ -388,7 +427,7 @@ class RobStrideController:
             )
 
         if limits.velocity_acc_rad is not None:
-            success &= self._set_float_parameter(
+            success &= await self._set_float_parameter(
                 motor_id,
                 ParameterIndex.ACC_RAD,
                 limits.velocity_acc_rad,
@@ -398,7 +437,7 @@ class RobStrideController:
 
         return success
 
-    def set_target_velocity(self, motor_id: int, velocity: float) -> None:
+    async def set_target_velocity(self, motor_id: int, velocity: float) -> None:
         """速度制御モードで目標速度を設定します。"""
         if motor_id not in self.motors:
             logger.error(f"Motor ID {motor_id} not found in motor list")
@@ -407,27 +446,27 @@ class RobStrideController:
         logger.info(
             f"Setting target velocity to {velocity:.2f} rad/s for motor {motor_id}"
         )
-        self._write_parameter(motor_id, ParameterIndex.SPD_REF.value, velocity)
+        await self._write_parameter(motor_id, ParameterIndex.SPD_REF.value, velocity)
         logger.info(f"Target velocity command sent successfully to motor {motor_id}")
 
     # --- Current Mode Methods ---
-    def set_mode_current(self, motor_id: int) -> bool:
-        return self._set_run_mode(motor_id, RunMode.CURRENT)
+    async def set_mode_current(self, motor_id: int) -> bool:
+        return await self._set_run_mode(motor_id, RunMode.CURRENT)
 
-    def set_target_current(self, motor_id: int, current: float) -> None:
+    async def set_target_current(self, motor_id: int, current: float) -> None:
         if motor_id not in self.motors:
             logger.error(f"Motor ID {motor_id} not found in motor list")
             return
 
         logger.info(f"Setting target current to {current:.2f} A for motor {motor_id}")
-        self._write_parameter(motor_id, ParameterIndex.IQ_REF.value, current)
+        await self._write_parameter(motor_id, ParameterIndex.IQ_REF.value, current)
         logger.info(f"Target current command sent successfully to motor {motor_id}")
 
     # --- CSP (Cyclic Synchronous Position) Mode Methods ---
-    def set_mode_csp(self, motor_id: int) -> bool:
-        return self._set_run_mode(motor_id, RunMode.POSITION_CSP)
+    async def set_mode_csp(self, motor_id: int) -> bool:
+        return await self._set_run_mode(motor_id, RunMode.POSITION_CSP)
 
-    def apply_csp_limits(self, motor_id: int) -> bool:
+    async def apply_csp_limits(self, motor_id: int) -> bool:
         """CSP モードのリミッターを適用"""
         if not self._check_motor_mode(motor_id, RunMode.POSITION_CSP):
             return False
@@ -441,7 +480,7 @@ class RobStrideController:
         limits = motor.limits
 
         if limits.csp_limit_spd is not None:
-            success &= self._set_float_parameter(
+            success &= await self._set_float_parameter(
                 motor_id,
                 ParameterIndex.LIMIT_SPD,
                 limits.csp_limit_spd,
@@ -450,7 +489,7 @@ class RobStrideController:
             )
 
         if limits.csp_limit_cur is not None:
-            success &= self._set_float_parameter(
+            success &= await self._set_float_parameter(
                 motor_id,
                 ParameterIndex.LIMIT_CUR,
                 limits.csp_limit_cur,
@@ -460,25 +499,44 @@ class RobStrideController:
 
         return success
 
-    def disconnect(self) -> None:
-        if self.ser and self.ser.is_open:
-            self.ser.close()
+    async def disconnect(self) -> None:
+        if self.writer and not self.writer.is_closing():
+            self.writer.close()
+            await self.writer.wait_closed()
             logger.info("Serial port closed")
 
-    def __enter__(self) -> 'RobStrideController':
-        """with構文の開始時に接続を行います。"""
-        if self.connect():
+    async def __aenter__(self) -> 'RobStrideController':
+        """async with構文の開始時に接続を行います。"""
+        if await self.connect():
             return self
         else:
             raise IOError("Failed to establish connection with motor")
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """with構文の終了時に、安全にモーターを停止し、切断します。"""
-        if self.ser and self.ser.is_open:
-            # 念のため全モーターの目標値を0にしてから停止
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """async with構文の終了時に、安全にモーターを停止し、切断します。"""
+        if self.writer and not self.writer.is_closing():
+            logger.info(f"Safely shutting down motors on {self.port} sequentially...")
+
+            # ★安全な逐次実行（forループ）
             for motor_id in self.motors.keys():
-                self.set_target_velocity(motor_id, 0.0)
-                self.set_target_current(motor_id, 0.0)
-                time.sleep(0.1)
-                self.disable(motor_id)
-        self.disconnect()
+                await self.set_target_velocity(motor_id, 0.0)
+                await self.set_target_current(motor_id, 0.0)
+
+            await asyncio.sleep(0.1)
+
+            for motor_id in self.motors.keys():
+                await self.disable(motor_id)
+
+        await self.disconnect()
+
+    def __enter__(self) -> 'RobStrideController':
+        """with構文の開始時に接続を行います。（非推奨：async withを使用してください）"""
+        raise NotImplementedError(
+            "Use 'async with' instead of 'with' for RobStrideController"
+        )
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """with構文の終了時の処理（非推奨：async withを使用してください）"""
+        raise NotImplementedError(
+            "Use 'async with' instead of 'with' for RobStrideController"
+        )
