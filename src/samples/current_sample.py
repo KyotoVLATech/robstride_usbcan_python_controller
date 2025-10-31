@@ -51,7 +51,7 @@ def main() -> None:
 
             # パターン1: 正方向トルク
             print("\n📍 パターン1: 正方向トルク (0.3A)")
-            target_current = 0.3
+            target_current = 0.5
             for motor in MOTORS:
                 controller.set_target_current(motor.id, target_current)
                 print(f"  -> モーター{motor.id}: 目標電流 {target_current:.1f} A")
