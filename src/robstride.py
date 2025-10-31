@@ -249,9 +249,6 @@ class RobStrideController:
         return True
 
     def _set_run_mode(self, motor_id: int, mode: RunMode) -> bool:
-        if not self._check_motor_enabled(motor_id):
-            return False
-
         logger.info(f"Setting motor {motor_id} to {mode.name} mode")
         self._write_parameter(motor_id, ParameterIndex.RUN_MODE.value, mode.value)
 

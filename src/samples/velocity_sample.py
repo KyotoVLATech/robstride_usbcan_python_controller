@@ -1,4 +1,3 @@
-import math
 import time
 
 from src.robstride import RobStride, RobStrideController, RobStrideLimits
@@ -86,39 +85,7 @@ def main() -> None:
                 print(f"  -> モーター{motor.id}: 目標速度 {target_velocity:.1f} rad/s")
             time.sleep(3)
 
-            # パターン4: 段階的速度変化
-            print("\n📍 パターン4: 段階的速度変化")
-            velocity_steps = [0.2, 0.5, 1.0, 1.5, 1.0, 0.5, 0.0, -0.5, -1.0, -0.5, 0.0]
-            for step_velocity in velocity_steps:
-                print(f"  -> 目標速度: {step_velocity:.1f} rad/s")
-                for motor in MOTORS:
-                    controller.set_target_velocity(motor.id, step_velocity)
-                time.sleep(1.5)
-
-            # パターン5: 正弦波速度パターン
-            print("\n📍 パターン5: 正弦波速度パターン")
-            duration = 10  # 10秒間
-            frequency = 0.5  # 0.5Hz
-            amplitude = 1.0  # 振幅 1.0 rad/s
-
-            start_time = time.time()
-            while time.time() - start_time < duration:
-                elapsed = time.time() - start_time
-                target_velocity = amplitude * math.sin(
-                    2 * math.pi * frequency * elapsed
-                )
-
-                for motor in MOTORS:
-                    controller.set_target_velocity(motor.id, target_velocity)
-
-                if int(elapsed * 2) % 2 == 0:  # 0.5秒毎に表示
-                    print(
-                        f"  -> 経過時間: {elapsed:.1f}s, 目標速度: {target_velocity:.2f} rad/s"
-                    )
-
-                time.sleep(0.1)
-
-            # パターン6: 最終停止
+            # パターン4: 最終停止
             print("\n📍 パターン6: 最終停止")
             for motor in MOTORS:
                 controller.set_target_velocity(motor.id, 0.0)
