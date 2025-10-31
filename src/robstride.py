@@ -21,12 +21,46 @@ logger.addHandler(stream_handler)
 
 
 @dataclass
+class RobStrideLimits:
+    """RobStrideモーターの制限パラメータを管理するクラス"""
+
+    # PP (Profile Position) Mode limits
+    pp_vel_max: Optional[float] = None  # 最大速度 (rad/s)
+    pp_acc_set: Optional[float] = None  # 加速度 (rad/s^2)
+    pp_limit_cur: Optional[float] = None  # 電流制限 (A)
+
+    # Velocity Mode limits
+    velocity_limit_cur: Optional[float] = None  # 電流制限 (A)
+    velocity_acc_rad: Optional[float] = None  # 加速度 (rad/s^2)
+
+    # CSP (Cyclic Synchronous Position) Mode limits
+    csp_limit_spd: Optional[float] = None  # 速度制限 (rad/s)
+    csp_limit_cur: Optional[float] = None  # 電流制限 (A)
+
+
+@dataclass
 class RobStride:
     id: int
     offset: float  # in radians
-    max_pos: float  # in radians (0 to 2π)
-    min_pos: float  # in radians (0 to 2π)
-    max_speed: float  # in radians per second
+    limits: Optional[RobStrideLimits] = None
+    _is_enabled: bool = False
+    _current_mode: Optional[RunMode] = None
+
+    def is_enabled(self) -> bool:
+        """モーターの有効状態を返す"""
+        return self._is_enabled
+
+    def get_current_mode(self) -> Optional[RunMode]:
+        """現在の制御モードを返す"""
+        return self._current_mode
+
+    def _set_enabled(self, enabled: bool) -> None:
+        """モーターの有効状態を設定（内部使用）"""
+        self._is_enabled = enabled
+
+    def _set_mode(self, mode: Optional[RunMode]) -> None:
+        """現在の制御モードを設定（内部使用）"""
+        self._current_mode = mode
 
 
 class RobStrideController:
@@ -165,6 +199,7 @@ class RobStrideController:
 
         if status == MotorStatus.RUN:
             logger.info(f"Motor {motor_id} enabled successfully and entered RUN state")
+            self.motors[motor_id]._set_enabled(True)
             return True
         else:
             logger.error(
@@ -181,11 +216,40 @@ class RobStrideController:
         logger.info(f"Disabling motor {motor_id}")
         frame = self._create_frame(CommandType.DISABLE, motor_id)
         self._send_and_receive(frame)
+        self.motors[motor_id]._set_enabled(False)
+        self.motors[motor_id]._set_mode(None)
         logger.info(f"Disable command sent successfully to motor {motor_id}")
 
-    def _set_run_mode(self, motor_id: int, mode: RunMode) -> bool:
+    def _check_motor_enabled(self, motor_id: int) -> bool:
+        """モーターが有効かどうかをチェック"""
         if motor_id not in self.motors:
             logger.error(f"Motor ID {motor_id} not found in motor list")
+            return False
+
+        if not self.motors[motor_id].is_enabled():
+            logger.error(
+                f"Motor {motor_id} is not enabled. Please enable the motor first."
+            )
+            return False
+
+        return True
+
+    def _check_motor_mode(self, motor_id: int, required_mode: RunMode) -> bool:
+        """モーターが指定されたモードかどうかをチェック"""
+        if not self._check_motor_enabled(motor_id):
+            return False
+
+        current_mode = self.motors[motor_id].get_current_mode()
+        if current_mode != required_mode:
+            logger.error(
+                f"Motor {motor_id} is not in {required_mode.name} mode. Current mode: {current_mode.name if current_mode else 'None'}"
+            )
+            return False
+
+        return True
+
+    def _set_run_mode(self, motor_id: int, mode: RunMode) -> bool:
+        if not self._check_motor_enabled(motor_id):
             return False
 
         logger.info(f"Setting motor {motor_id} to {mode.name} mode")
@@ -197,6 +261,7 @@ class RobStrideController:
             current_mode = int.from_bytes(read_data[0:1], 'little')
             if current_mode == mode.value:
                 logger.info(f"Motor {motor_id} {mode.name} mode set successfully")
+                self.motors[motor_id]._set_mode(mode)
                 return True
             else:
                 logger.error(
@@ -242,15 +307,47 @@ class RobStrideController:
     def set_mode_pp(self, motor_id: int) -> bool:
         return self._set_run_mode(motor_id, RunMode.POSITION_PP)
 
-    def set_pp_velocity(self, motor_id: int, velocity: float) -> bool:
-        return self._set_float_parameter(
-            motor_id, ParameterIndex.VEL_MAX, velocity, "PP velocity", "rad/s"
-        )
+    def apply_pp_limits(self, motor_id: int) -> bool:
+        """PP モードのリミッターを適用"""
+        if not self._check_motor_mode(motor_id, RunMode.POSITION_PP):
+            return False
 
-    def set_pp_acceleration(self, motor_id: int, acceleration: float) -> bool:
-        return self._set_float_parameter(
-            motor_id, ParameterIndex.ACC_SET, acceleration, "PP acceleration", "rad/s^2"
-        )
+        motor = self.motors[motor_id]
+        if not motor.limits:
+            logger.warning(f"No limits configured for motor {motor_id}")
+            return True
+
+        success = True
+        limits = motor.limits
+
+        if limits.pp_vel_max is not None:
+            success &= self._set_float_parameter(
+                motor_id,
+                ParameterIndex.VEL_MAX,
+                limits.pp_vel_max,
+                "PP velocity",
+                "rad/s",
+            )
+
+        if limits.pp_acc_set is not None:
+            success &= self._set_float_parameter(
+                motor_id,
+                ParameterIndex.ACC_SET,
+                limits.pp_acc_set,
+                "PP acceleration",
+                "rad/s^2",
+            )
+
+        if limits.pp_limit_cur is not None:
+            success &= self._set_float_parameter(
+                motor_id,
+                ParameterIndex.LIMIT_CUR,
+                limits.pp_limit_cur,
+                "PP current limit",
+                "A",
+            )
+
+        return success
 
     def set_target_position(self, motor_id: int, position_rad: float) -> None:
         if motor_id not in self.motors:
@@ -271,21 +368,41 @@ class RobStrideController:
     def set_mode_velocity(self, motor_id: int) -> bool:
         return self._set_run_mode(motor_id, RunMode.VELOCITY)
 
-    def set_velocity_limit_cur(self, motor_id: int, current: float) -> bool:
-        return self._set_float_parameter(
-            motor_id, ParameterIndex.LIMIT_CUR, current, "Velocity current limit", "A"
-        )
+    def apply_velocity_limits(self, motor_id: int) -> bool:
+        """Velocity モードのリミッターを適用"""
+        if not self._check_motor_mode(motor_id, RunMode.VELOCITY):
+            return False
 
-    def set_velocity_acceleration(self, motor_id: int, acceleration: float) -> bool:
-        return self._set_float_parameter(
-            motor_id,
-            ParameterIndex.ACC_RAD,
-            acceleration,
-            "Velocity acceleration",
-            "rad/s^2",
-        )
+        motor = self.motors[motor_id]
+        if not motor.limits:
+            logger.warning(f"No limits configured for motor {motor_id}")
+            return True
+
+        success = True
+        limits = motor.limits
+
+        if limits.velocity_limit_cur is not None:
+            success &= self._set_float_parameter(
+                motor_id,
+                ParameterIndex.LIMIT_CUR,
+                limits.velocity_limit_cur,
+                "Velocity current limit",
+                "A",
+            )
+
+        if limits.velocity_acc_rad is not None:
+            success &= self._set_float_parameter(
+                motor_id,
+                ParameterIndex.ACC_RAD,
+                limits.velocity_acc_rad,
+                "Velocity acceleration",
+                "rad/s^2",
+            )
+
+        return success
 
     def set_target_velocity(self, motor_id: int, velocity: float) -> None:
+        """速度制御モードで目標速度を設定します。"""
         if motor_id not in self.motors:
             logger.error(f"Motor ID {motor_id} not found in motor list")
             return
@@ -313,10 +430,38 @@ class RobStrideController:
     def set_mode_csp(self, motor_id: int) -> bool:
         return self._set_run_mode(motor_id, RunMode.POSITION_CSP)
 
-    def set_csp_velocity_limit(self, motor_id: int, velocity: float) -> bool:
-        return self._set_float_parameter(
-            motor_id, ParameterIndex.LIMIT_SPD, velocity, "CSP velocity limit", "rad/s"
-        )
+    def apply_csp_limits(self, motor_id: int) -> bool:
+        """CSP モードのリミッターを適用"""
+        if not self._check_motor_mode(motor_id, RunMode.POSITION_CSP):
+            return False
+
+        motor = self.motors[motor_id]
+        if not motor.limits:
+            logger.warning(f"No limits configured for motor {motor_id}")
+            return True
+
+        success = True
+        limits = motor.limits
+
+        if limits.csp_limit_spd is not None:
+            success &= self._set_float_parameter(
+                motor_id,
+                ParameterIndex.LIMIT_SPD,
+                limits.csp_limit_spd,
+                "CSP velocity limit",
+                "rad/s",
+            )
+
+        if limits.csp_limit_cur is not None:
+            success &= self._set_float_parameter(
+                motor_id,
+                ParameterIndex.LIMIT_CUR,
+                limits.csp_limit_cur,
+                "CSP current limit",
+                "A",
+            )
+
+        return success
 
     def disconnect(self) -> None:
         if self.ser and self.ser.is_open:
