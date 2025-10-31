@@ -1,65 +1,91 @@
-import time
+import asyncio
 
-from src.robstride import RobStride
+from src.robstride import RobStride, RobStrideController
 
 # --- 設定項目 ---
-SERIAL_PORT = "COM12"  # ご自身の環境に合わせてCOMポート名を指定してください
-MOTOR_ID = 127  # 制御するモーターのCAN IDを指定してください
+SERIAL_PORT = "COM5"  # ご自身の環境に合わせてCOMポート名を指定してください
+
+# モーターの設定
+MOTORS = [
+    RobStride(id=1, offset=0.0),
+    # RobStride(id=5, offset=0.0),
+    # RobStride(id=6, offset=0.0),
+]
 
 
-def main() -> None:
+async def main() -> None:
     """
-    RobStrideモーターを電流モードで制御するメイン関数。
-    安全のため、短時間の電流印加と停止を繰り返します。
+    RobStrideモーターをCurrent制御モードで制御するメイン関数。
     """
-    print("--- RobStride 電流モード 制御サンプル (安全性考慮版) ---")
-    print("警告: 電流モードの無負荷運転はモーターを暴走させる危険があります。")
-    print("このサンプルは短時間の指令で安全に動作をデモします。")
+    print("--- RobStride Current制御モードサンプル ---")
 
     try:
-        with RobStride(port=SERIAL_PORT, motor_id=MOTOR_ID) as motor:
+        async with RobStrideController(port=SERIAL_PORT, motors=MOTORS) as controller:
 
-            # --- ステップ1: Disable状態でモードを設定 ---
-            if not motor.set_mode_current():
-                print("エラー: 電流モードへの設定に失敗しました。処理を中断します。")
-                return
+            # --- ステップ1: 全モーターをDisable状態でCurrent制御モードに設定 ---
+            print("\n🔧 全モーターをCurrent制御モードに設定中...")
+            for motor in MOTORS:
+                if not await controller.set_mode_current(motor.id):
+                    print(
+                        f"エラー: モーター{motor.id}のCurrent制御モード設定に失敗しました。"
+                    )
+                    return
+                print(f"  ✅ モーター{motor.id}: Current制御モード設定完了")
 
-            # --- ステップ2: モーターを有効化 ---
-            if not motor.enable():
-                print("エラー: モーターの有効化に失敗しました。処理を中断します。")
-                return
+            # --- ステップ2: 全モーターを有効化 ---
+            print("\n⚡ 全モーターを有効化中...")
+            for motor in MOTORS:
+                if not await controller.enable(motor.id):
+                    print(f"エラー: モーター{motor.id}の有効化に失敗しました。")
+                    return
+                print(f"  ✅ モーター{motor.id}: 有効化完了")
 
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
 
-            # --- ステップ3: 電流指令を送信 ---
-            print("\n✅ 全ての準備が完了しました。モーターを動かします。")
+            # --- ステップ3: Current制御モードでは特別な制限設定は不要 ---
+            print("\n⚙️ Current制御モードでは特別な制限設定は不要です")
+            print("   Current制御では、set_target_current()で直接電流値を指定します")
 
-            # 0.25Aの電流を2秒間印加 (ゆっくり正回転)
-            motor.set_target_current(0.25)
-            print("  -> 目標電流 0.25 A (2秒間)...")
-            time.sleep(2)
+            # --- ステップ4: 電流制御パターンを実行 ---
+            print("\n🎯 電流制御パターンを開始します...")
 
-            # 0Aで1秒間停止
-            motor.set_target_current(0.0)
-            print("  -> 停止 (1秒間)...")
-            time.sleep(1)
+            # パターン1: 正方向トルク
+            print("\n📍 パターン1: 正方向トルク (0.3A)")
+            target_current = 0.5
+            for motor in MOTORS:
+                await controller.set_target_current(motor.id, target_current)
+                print(f"  -> モーター{motor.id}: 目標電流 {target_current:.1f} A")
+            await asyncio.sleep(2)
 
-            # -0.25Aの電流を2秒間印加 (ゆっくり逆回転)
-            motor.set_target_current(-0.25)
-            print("  -> 目標電流 -0.25 A (2秒間)...")
-            time.sleep(2)
+            # パターン2: 電流停止
+            print("\n📍 パターン2: 電流停止 (0.0A)")
+            target_current = 0.0
+            for motor in MOTORS:
+                await controller.set_target_current(motor.id, target_current)
+                print(f"  -> モーター{motor.id}: 目標電流 {target_current:.1f} A")
+            await asyncio.sleep(1)
 
-            # 最終的に0Aで停止
-            motor.set_target_current(0.0)
-            print("  -> 最終停止...")
-            time.sleep(1)
+            # パターン3: 負方向トルク
+            print("\n📍 パターン3: 負方向トルク (-0.3A)")
+            target_current = -0.3
+            for motor in MOTORS:
+                await controller.set_target_current(motor.id, target_current)
+                print(f"  -> モーター{motor.id}: 目標電流 {target_current:.1f} A")
+            await asyncio.sleep(2)
 
-            print("\n正常に処理が完了しました。")
+            # パターン4: 最終停止
+            print("\n📍 パターン5: 最終停止")
+            for motor in MOTORS:
+                await controller.set_target_current(motor.id, 0.0)
+                print(f"  -> モーター{motor.id}: 目標電流 0.0 A")
+            await asyncio.sleep(1)
+
+            print("\n✅ 全ての動作パターンが正常に完了しました。")
 
     except Exception as e:
-        print(f"\n予期せぬエラーが発生しました: {e}")
+        print(f"\n❌ 予期せぬエラーが発生しました: {e}")
 
 
 if __name__ == '__main__':
-    main()
-# python -m src.samples.current_sample
+    asyncio.run(main())
+# 実行コマンド: python -m src.samples.current_sample

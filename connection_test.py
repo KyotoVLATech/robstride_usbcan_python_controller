@@ -1,12 +1,12 @@
-import time
+import asyncio
 
-import serial
+import serial_asyncio
 
 # --- 設定項目 ---
 # ご自身の環境に合わせて変更してください
-SERIAL_PORT = "COM12"  # COMポート名（linuxなら/dev/ttyUSB0など）
+SERIAL_PORT = "COM5"  # COMポート名（linuxなら/dev/ttyUSB0など）
 BAUDRATE = 921600  # ボーレート
-MOTOR_CAN_ID = 127  # 確認したいモーターのCAN ID（初期値は127）
+MOTOR_CAN_ID = 1  # 確認したいモーターのCAN ID（初期値は127）
 HOST_CAN_ID = 253  # ホスト側(PC)のID (任意だが0以外)
 # -----------------
 
@@ -34,8 +34,8 @@ def create_at_command(
     return header + encoded_id_bytes + extended_frame_flag + data + tail
 
 
-# --- メイン処理 ---
-if __name__ == "__main__":
+async def main() -> None:
+    """非同期メイン処理"""
     # 疎通確認用の「デバイスID取得（タイプ0）」コマンドを生成
     # このコマンドはモーターにデータを要求するだけで、状態を変更しないため安全です
     # データペイロードは0でなければなりません
@@ -46,24 +46,39 @@ if __name__ == "__main__":
     print(f"シリアルポート {SERIAL_PORT} を開きます...")
 
     try:
-        with serial.Serial(SERIAL_PORT, BAUDRATE, timeout=1.0) as ser:
-            print("ポートを開きました。")
+        reader, writer = await serial_asyncio.open_serial_connection(
+            url=SERIAL_PORT, baudrate=BAUDRATE, timeout=1.0
+        )
 
-            print(f"送信コマンド (HEX): {command_to_send.hex(' ')}")
-            ser.write(command_to_send)
-            print("コマンドを送信しました。応答を待っています...")
+        print("ポートを開きました。")
 
-            time.sleep(0.5)  # 応答を待つための短いウェイト
+        print(f"送信コマンド (HEX): {command_to_send.hex(' ')}")
+        writer.write(command_to_send)
+        await writer.drain()
+        print("コマンドを送信しました。応答を待っています...")
 
-            response = ser.read(100)  # 十分な長さのデータを読み取る
+        await asyncio.sleep(0.5)  # 応答を待つための短いウェイト
 
-            if response:
-                print("\n✅ 応答を受信しました！ 疎通成功です。")
-                print(f"受信データ (HEX): {response.hex(' ')}")
-            else:
-                print("\n❌ 応答がありませんでした。")
+        try:
+            response = await asyncio.wait_for(reader.read(100), timeout=1.0)
+        except asyncio.TimeoutError:
+            response = b''
 
-    except serial.SerialException as e:
+        if response:
+            print("\n✅ 応答を受信しました！ 疎通成功です。")
+            print(f"受信データ (HEX): {response.hex(' ')}")
+        else:
+            print("\n❌ 応答がありませんでした。")
+
+        writer.close()
+        await writer.wait_closed()
+
+    except Exception as e:
         print("\nエラー: シリアルポートを開けませんでした。")
         print(f"詳細: {e}")
         print("COMポート名が正しいか、デバイスがPCに接続されているか確認してください。")
+
+
+# --- メイン処理 ---
+if __name__ == "__main__":
+    asyncio.run(main())

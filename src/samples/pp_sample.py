@@ -1,64 +1,100 @@
+import asyncio
 import math
-import time
 
-from src.robstride import RobStride
+from src.robstride import RobStride, RobStrideController, RobStrideLimits
 
 # --- 設定項目 ---
-SERIAL_PORT = "COM12"  # ご自身の環境に合わせてCOMポート名を指定してください
-MOTOR_ID = 127  # 制御するモーターのCAN IDを指定してください
+SERIAL_PORT = "COM5"  # ご自身の環境に合わせてCOMポート名を指定してください
+
+# モーター制限設定
+MOTOR_LIMITS = RobStrideLimits(
+    pp_vel_max=10.0,  # PP最大速度 [rad/s]
+    pp_acc_set=10.0,  # PP加速度 [rad/s^2]
+    pp_limit_cur=5.0,  # PP電流制限 [A]
+)
+
+# モーターの設定
+MOTORS = [
+    RobStride(id=1, offset=0.0, limits=MOTOR_LIMITS),
+    # RobStride(id=5, offset=0.0, limits=MOTOR_LIMITS),
+    # RobStride(id=6, offset=0.0, limits=MOTOR_LIMITS),
+]
 
 
-def main() -> None:
+async def main() -> None:
     """
-    RobStrideモーターをPPモードで制御するメイン関数。
-    with構文を使用し、安全な接続・切断を保証します。
+    RobStrideモーターをPPモード（Position Profile）で制御するメイン関数。
     """
-    print("--- RobStride PPモード 制御サンプル ---")
+    print("--- RobStride PPモード（Position Profile）制御サンプル ---")
 
     try:
-        # with構文により、ブロックを抜ける際に自動でdisable()とdisconnect()が呼ばれます
-        with RobStride(port=SERIAL_PORT, motor_id=MOTOR_ID) as motor:
+        async with RobStrideController(port=SERIAL_PORT, motors=MOTORS) as controller:
 
-            # --- ステップ1: Disable状態でモードを設定 ---
-            if not motor.set_mode_pp():
-                print("エラー: PPモードへの設定に失敗しました。処理を中断します。")
-                return  # 関数を抜ける (withブロックが終了処理をハンドル)
+            # --- ステップ1: 全モーターをDisable状態でPPモードに設定 ---
+            print("\n🔧 全モーターをPPモードに設定中...")
+            for motor in MOTORS:
+                if not await controller.set_mode_pp(motor.id):
+                    print(f"エラー: モーター{motor.id}のPPモード設定に失敗しました。")
+                    return
+                print(f"  ✅ モーター{motor.id}: PPモード設定完了")
 
-            # --- ステップ2: モーターを有効化 ---
-            if not motor.enable():
-                print("エラー: モーターの有効化に失敗しました。処理を中断します。")
-                return
+            # --- ステップ2: 全モーターを有効化 ---
+            print("\n⚡ 全モーターを有効化中...")
+            for motor in MOTORS:
+                if not await controller.enable(motor.id):
+                    print(f"エラー: モーター{motor.id}の有効化に失敗しました。")
+                    return
+                print(f"  ✅ モーター{motor.id}: 有効化完了")
 
-            time.sleep(0.5)  # 有効化後の安定待ち
+            await asyncio.sleep(0.5)
 
-            # --- ステップ3: Enable状態でパラメータを設定 ---
-            if not motor.set_pp_velocity(5.0):
-                print("エラー: 最大速度の設定に失敗しました。処理を中断します。")
-                return
+            # --- ステップ3: PP制限パラメータを適用 ---
+            print("\n⚙️ PP制限パラメータを設定中...")
+            for motor in MOTORS:
+                if not await controller.apply_pp_limits(motor.id):
+                    print(f"エラー: モーター{motor.id}のPP制限設定に失敗しました。")
+                    return
+                print(f"  ✅ モーター{motor.id}: PP制限適用完了")
 
-            if not motor.set_pp_acceleration(10.0):
-                print("エラー: 加速度の設定に失敗しました。処理を中断します。")
-                return
+            # --- ステップ4: 位置制御パターンを実行 ---
+            print("\n🎯 位置制御パターンを開始します...")
 
-            # --- ステップ4: 位置指令を送信 ---
-            print("\n✅ 全ての準備が完了しました。モーターを動かします。")
+            # パターン1: 原点復帰
+            print("\n📍 パターン1: 原点復帰")
+            for motor in MOTORS:
+                await controller.set_target_position(motor.id, 0.0)
+                print(f"  -> モーター{motor.id}: 目標位置 0.00 rad")
+            await asyncio.sleep(3)
 
-            # 90度 (π/2 rad) の位置へ移動
-            motor.set_target_position(math.pi / 2)
-            print("  -> 目標位置 {math.pi/2:.2f} rad へ移動中...")
-            time.sleep(3)  # 移動が完了するまで待機
+            # パターン2: 90度回転
+            print("\n📍 パターン2: 90度 (π/2 rad) 回転")
+            target_pos = math.pi / 2
+            for motor in MOTORS:
+                await controller.set_target_position(motor.id, target_pos)
+                print(f"  -> モーター{motor.id}: 目標位置 {target_pos:.2f} rad")
+            await asyncio.sleep(4)
 
-            # 0度の位置へ戻る
-            motor.set_target_position(0.0)
-            print("  -> 目標位置 0.00 rad へ移動中...")
-            time.sleep(3)
+            # パターン3: 180度回転
+            print("\n📍 パターン3: 180度 (π rad) 回転")
+            target_pos = math.pi
+            for motor in MOTORS:
+                await controller.set_target_position(motor.id, target_pos)
+                print(f"  -> モーター{motor.id}: 目標位置 {target_pos:.2f} rad")
+            await asyncio.sleep(4)
 
-            print("\n正常に処理が完了しました。")
+            # パターン4: 原点復帰
+            print("\n📍 パターン4: 原点復帰")
+            for motor in MOTORS:
+                await controller.set_target_position(motor.id, 0.0)
+                print(f"  -> モーター{motor.id}: 目標位置 0.00 rad")
+            await asyncio.sleep(3)
+
+            print("\n✅ 全ての動作パターンが正常に完了しました。")
 
     except Exception as e:
-        print(f"\n予期せぬエラーが発生しました: {e}")
+        print(f"\n❌ 予期せぬエラーが発生しました: {e}")
 
 
 if __name__ == '__main__':
-    main()
-# python -m src.samples.pp_sample
+    asyncio.run(main())
+# 実行コマンド: python -m src.samples.pp_sample
