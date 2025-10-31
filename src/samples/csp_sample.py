@@ -8,8 +8,8 @@ SERIAL_PORT = "COM5"  # ご自身の環境に合わせてCOMポート名を指�
 
 # モーター制限設定
 MOTOR_LIMITS = RobStrideLimits(
-    csp_limit_spd=1.0,  # CSP速度制限 [rad/s]
-    csp_limit_cur=2.0,  # CSP電流制限 [A]
+    csp_limit_spd=10.0,  # CSP速度制限 [rad/s]
+    csp_limit_cur=5.0,  # CSP電流制限 [A]
 )
 
 # 3つのモーターの設定

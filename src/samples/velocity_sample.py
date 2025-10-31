@@ -63,7 +63,7 @@ def main() -> None:
 
             # パターン1: 正方向回転
             print("\n📍 パターン1: 正方向回転 (0.5 rad/s)")
-            target_velocity = 0.5
+            target_velocity = 15.7
             for motor in MOTORS:
                 controller.set_target_velocity(motor.id, target_velocity)
                 print(f"  -> モーター{motor.id}: 目標速度 {target_velocity:.1f} rad/s")

@@ -73,16 +73,7 @@ def main() -> None:
                 print(f"  -> モーター{motor.id}: 目標電流 {target_current:.1f} A")
             time.sleep(2)
 
-            # パターン4: 段階的電流変化
-            print("\n📍 パターン4: 段階的電流変化")
-            current_steps = [0.1, 0.2, 0.4, 0.2, 0.0, -0.2, -0.4, -0.2, 0.0]
-            for step_current in current_steps:
-                print(f"  -> 目標電流: {step_current:.1f} A")
-                for motor in MOTORS:
-                    controller.set_target_current(motor.id, step_current)
-                time.sleep(1)
-
-            # パターン5: 最終停止
+            # パターン4: 最終停止
             print("\n📍 パターン5: 最終停止")
             for motor in MOTORS:
                 controller.set_target_current(motor.id, 0.0)
